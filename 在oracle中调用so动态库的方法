@@ -25,6 +25,9 @@ int main()
 
 
 2. 在目录 /home/oracle/tmp/ 里执行下面的命令将c代码编译成so文件atest.so:
+# 若代码修改后，重新编译覆盖so文件后，oracle客户端退出重新登录即可生效。
+# oracle服务器在多进程模式下，c代码里的全局变量应该可以正常使用，在同一个session里，全局变量的值被修改后会在当前session里生效
+# 但新的session不会读取另外的session修改的值，只会读取初始值。即各session之间相互不影响。但多线程模式的服务器可能会有问题，未求证。
 gcc -fPIC -c atest.c
 gcc -shared -o atest.so atest.o
 
