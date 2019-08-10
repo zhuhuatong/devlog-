@@ -1,0 +1,72 @@
+参考： https://docs.python.org/3.7/extending/embedding.html
+
+0. 环境：
+    centos 7 x64, python3.7
+
+1. 编写python代码文件  call_py_time.c ，内容如下（这里顺便也测试了下jieba分词）：
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+int
+main(int argc, char *argv[])
+{
+    wchar_t *program = Py_DecodeLocale(argv[0], NULL);
+    if (program == NULL) {
+        fprintf(stderr, "Fatal error: cannot decode argv[0]\n");
+        exit(1);
+    }
+    Py_SetProgramName(program);  /* optional but recommended */
+    Py_Initialize();
+    PyRun_SimpleString("from time import time,ctime\n"
+                       "print('Today is', ctime(time()))\n"
+                       "a_time=time()\n");
+    PyRun_SimpleString("import jieba\n"
+                       "seg_list = jieba.cut('我来到北京清华大学', cut_all=True)\n"
+                       "a_str = ','.join(seg_list)\n"
+                       "print(a_time, a_str)\n");
+    
+    PyRun_SimpleString("import jieba\n"
+                       "seg_list = jieba.cut('他来到了网易杭研大厦', cut_all=True)\n"
+                       "a_str = ','.join(seg_list)\n"
+                       "print(a_time, a_str)\n");
+
+
+    if (Py_FinalizeEx() < 0) {
+        exit(120);
+    }
+    PyMem_RawFree(program);
+    return 0;
+}
+
+
+
+
+2. 确保环境变量 C_INCLUDE_PATH 中包含 python安装目录中include/python3.m ， LIBRARY_PATH 与 LD_LIBRARY_PATH 包含安装目录中的lib，我这边的环境如下：
+[oracle@localhost py]$ echo $C_INCLUDE_PATH
+/opt/apps/Python-3.7.4/include/python3.7m:
+[oracle@localhost py]$ 
+[oracle@localhost py]$ echo $LD_LIBRARY_PATH
+/opt/apps/Python-3.7.4/lib:
+[oracle@localhost py]$ 
+[oracle@localhost py]$ echo $LIBRARY_PATH
+/opt/apps/Python-3.7.4/lib:
+[oracle@localhost py]$ 
+
+
+3. 使用下面的命令编译c代码，这里必须同时加上 -lpython3 和 -lpython3.7m ，否则编译会出错：
+gcc call_py_time.c -lpython3 -lpython3.7m -o  call_py_time
+
+4. 执行代码测试，如下：
+
+[oracle@localhost py]$ ./call_py_time 
+Today is Sat Aug 10 23:50:51 2019
+Building prefix dict from the default dictionary ...
+Loading model from cache /tmp/jieba.cache
+Loading model cost 1.235 seconds.
+Prefix dict has been built succesfully.
+1565452251.0463274 我,来到,北京,清华,清华大学,华大,大学
+1565452251.0463274 他,来到,了,网易,杭,研,大厦
+
+
+
