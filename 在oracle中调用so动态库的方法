@@ -1,3 +1,7 @@
+0. 系统环境：
+   操作系统: centos 7 x64
+   oracle 版本： oracle 11g
+
 1. 编写c测试代码文件 /home/oracle/tmp/atest.c ，内容如下：
 /***********************************/
 #include <stdio.h>
