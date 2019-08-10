@@ -1,5 +1,5 @@
 1. 编写c测试代码文件 /home/oracle/tmp/atest.c ，内容如下：
-
+/***********************************/
 #include <stdio.h>
 
 int plus(int a, int b)
@@ -18,6 +18,71 @@ int main()
  
     return 0;
 }
+
+
+2. 在目录 /home/oracle/tmp/ 里执行下面的命令将c代码编译成so文件atest.so:
+gcc -fPIC -c atest.c
+gcc -shared -o atest.so atest.o
+
+3. 修改oracle服务器中的文件 $ORACLE_HOME/network/admin/tnsnames.ora 的内容，在其末尾添加下面一段内容：
+
+EXTPROC_CONNECTION_DATA=
+  (DESCRIPTION=
+    (ADDRESS_LIST=
+    (ADDRESS = (PROTOCOL = IPC)(KEY = EXTPROC1521))
+  )
+  (CONNECT_DATA=
+    (SID = PLSExtProc)
+    (PRESENTATION = RO)
+  )
+  )
+  
+ 4. 修改oracle服务器中的文件 $ORACLE_HOME/network/admin/listener.ora 的内容，在其末尾添加下面一段内容：
+ # 下面的EXTPROC_DLLS的值，填写具体需要调用的so动态库，若有多个，linux里用冒号隔开。
+ # 若第一个冒号之前是ONLY，则表示系统只允许调用这里列出的so库，否则表示系统允许调用
+ # 这里列出的so库之外，还可以调用$ORACLE_HOME/bin 或 $ORACLE_HOME/lib 里的so文件
+ # 若这里直接写ANY，则表示可以调用服务器上任何一个so文件
+ 
+SID_LIST_LISTENER =
+(SID_LIST =
+  (SID_DESC =
+  (GLOBAL_DBNAME = orcl)
+  (SID_NAME = orcl)
+  )
+  (SID_DESC=
+  (SID_NAME = PLSExtProc)
+  (ORACLE_HOME = /u01/app/oracle/product/11.2.0/db_1)
+  (ENVS = EXTPROC_DLLS=/home/oracle/tmp/atest.so:)
+  (PROGRAM = extproc)
+  ) 
+)
+
+5. 使用下面的命令重启oracle监听：
+lsnrctl stop;
+lsnrctl start;
+lsnrctl status # 可以观察启动前后监听的状态
+
+6. 登录oracle，使用下面的语句创建 library 对象：
+create or replace library lib_fun_atest as '/home/oracle/tmp/atest.so';
+
+7. 使用下面的创建oracle函数调用so库：
+create or replace function a_test_plus(a binary_integer, b binary_integer) return binary_integer
+as EXTERNAL
+library lib_fun_atest
+name "plus"
+language C;
+/
+ -- 上面 plus 是c代码里的函数，需要区分大小写，所以用双引号引起来。
+ 
+ 8. 在sql命令行窗口执行下面的语句测试函数：
+ SQL> select a_test_plus(88,99) from dual ;
+
+A_TEST_PLUS(88,99)
+------------------
+               187
+
+SQL> 
+
 
 
 
