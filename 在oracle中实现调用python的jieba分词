@@ -1,0 +1,272 @@
+0. 测试环境
+    centos 7.4 x64
+    oracle 11g
+
+1. 在oracle中配置实现调用外部so动态库，具体参考本站"在oracle中调用so动态库的方法"
+
+2. 在c代码中实现调用python代码，由于jieba分词在python环境中首次调用需要初始化，所以为了性能考虑，代码中会有专门的初始化模块，详细代码请继续读下文。
+
+3. 创建c代码文件 atest.c ，在其中加入如下代码：
+/********************/
+#include <stdio.h>
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+char jieba_result[1024];
+
+/*
+考虑oracle的中文可能为gbk或utf8，搞得比较烦，因此在外部（oracle中）都首先将字符串转换成 base64 ，同时指定编码。 
+在python代码内对base64解码并按指定编码转换成utf8对应的字符串
+*/
+
+PyObject* py_call_jieba_init(const char *input_str, const char *coding)
+{
+    
+    //PyObject *pName, *pModule, *pFunc;
+    PyObject *pArgs, *pValue;
+    int i;
+    chdir("/home/oracle/tmp/");
+    // putenv("PYTHONPATH=/home/oracle/tmp/");
+    setenv("PYTHONPATH",".:/home/oracle/tmp/",1);
+    //setenv("PYTHONIOENCODING","gbk",1);
+
+    Py_Initialize();
+    printf("111\n");
+    pName = PyUnicode_DecodeFSDefault("jieba_call");
+    printf("112\n");
+    /* Error checking of pName left out */
+
+    pModule = PyImport_Import(pName);
+    printf("113\n");
+    Py_DECREF(pName);
+    printf("114\n");
+
+    if (pModule != NULL) {
+        pFunc = PyObject_GetAttrString(pModule, "cut_all_b64");
+        /* pFunc is a new reference */
+
+        if (pFunc && PyCallable_Check(pFunc)) {
+            printf("fun init ok...\n");
+            return pFunc;
+            /*
+                官方代码在这里调用函数，我这里调整一下，返回函数指针，这样外面可以重复调用，不用重复初始化. 因此，本函数末尾的返回 char* 就无效了。
+            */
+        }
+        else {
+            if (PyErr_Occurred())
+                PyErr_Print();
+            fprintf(stderr, "Cannot find function \"%s\"\n", "cut_all-3");
+        }
+        printf("--------6-1\n");
+        //Py_XDECREF(pFunc);
+        printf("--------6-2\n");
+        //Py_DECREF(pModule);
+        printf("--------6-3\n");
+    }
+    else {
+        printf("77771[]\n");
+        PyErr_Print();
+        printf("77772\n");
+        fprintf(stderr, "Failed to load \"%s\"\n", "jieba_call.py");
+        return "ERROR3";
+    }
+    if (Py_FinalizeEx() < 0) {
+        return "ERROR4";
+    }
+    return jieba_result;
+}
+
+
+// 调用python内的实现分词的函数
+char* py_call_run_fun(PyObject* pFunc, char *input_str, char *coding){
+            PyObject* pArgs = PyTuple_New(2);
+            PyObject* pValue;
+            int i;
+            for (i = 0; i < 2; ++i) {
+                //pValue = PyLong_FromLong(atoi(argv[i + 3]));
+                if(i==0) {
+                    pValue = PyUnicode_FromString(input_str);
+                }
+                if(i==1){
+                    pValue = PyUnicode_FromString(coding);
+                }
+                if (!pValue) {
+                    //Py_DECREF(pArgs);
+                    //Py_DECREF(pModule);
+                    fprintf(stderr, "Cannot convert argument\n");
+                    return "ERROR";
+                }
+                // pValue reference stolen here:
+                PyTuple_SetItem(pArgs, i, pValue);
+            }
+
+            printf("--------1\n");
+            pValue = PyObject_CallObject(pFunc, pArgs);
+            printf("--------2\n");
+            //Py_DECREF(pArgs);
+            printf("--------3\n");
+            if (pValue != NULL) {
+                printf("--------4\n");
+                sprintf(jieba_result, "%s", PyBytes_AsString(pValue));
+                printf("Result of call: %s\n", jieba_result);
+                return jieba_result;
+                //Py_DECREF(pValue);
+                printf("--------4-2-3\n");
+            }
+            else {
+                printf("--------5\n");
+                //Py_DECREF(pFunc);
+                //Py_DECREF(pModule);
+                PyErr_Print();
+                fprintf(stderr,"Call failed\n");
+                return "ERROR2";
+            }
+}
+
+
+// 是否初始化的标记
+int jieba_init_flag=0;
+PyObject* pFunc_xyz;
+char *jieba_cut_all(char* sss, char* coding){
+    if(jieba_init_flag==0){
+        pFunc_xyz = py_call_jieba_init("1tC5+tXjva3Jz7qjurzW3Q==","gbk");  // 这里两个参数实际已不起作用
+        jieba_init_flag = 1;
+    }
+    return py_call_run_fun(pFunc_xyz, sss,coding );
+}
+
+
+/********************/
+
+4. 使用下面的命令将c代码变异成so文件（在目录/home/oracle/tmp 内）：
+gcc -fPIC -c atest.c
+gcc -shared -lpython3 -lpython3.7m -o atest.so atest.o
+
+
+5. 在oracle内创建so对应的lib，如下命令：
+create or replace library lib_fun_atest as '/home/oracle/tmp/atest.so';
+
+6. 创建调用so内函数的procedure，如下：
+create or replace function a_test_jieba_cut_all(a varchar2, coding varchar2) return varchar2
+as EXTERNAL
+library lib_fun_atest
+name "jieba_cut_all"
+language C;
+
+
+7. 由于外部过程 jieba_cut_all 实现的是对base64的内容进行处理，因此在oracle内，需要再对原始内容进行base64转换，对处理结果再重新解码，如下：
+-- 本次测试用的oracle，是gbk编码，所以，下面的存储过程内固定写为gbk。另一种支持的编码是 utf8
+create or replace function a_test_jieba_cut_main(input varchar2) return varchar2
+is
+input_b64 varchar2(4000);
+output_b64 varchar2(4000);
+output_str varchar2(4000);
+begin
+    input_b64 := utl_raw.cast_to_varchar2(utl_encode.base64_encode(utl_raw.cast_to_raw(input))) ;
+    output_b64 := a_test_jieba_cut(input_b64,'gbk');
+    output_str := utl_raw.cast_to_varchar2(utl_encode.base64_decode(utl_raw.cast_to_raw(output_b64)));
+    return output_str;
+end;
+
+
+8. 对了，前面的步骤，还遗漏了python代码，在服务器上创建文件 jieba_call.py （位于目录：/home/oracle/tmp）, 内容如下：
+############################################
+import jieba
+import base64
+
+
+def cut_all_b64(input_b64, coding='utf8'):
+    input = base64.b64decode(input_b64)
+    #
+    a_str = input.decode(coding)
+    #
+    print(11,coding,a_str)
+    seg_list = jieba.cut(a_str, cut_all=True)
+    res = ", ".join(seg_list)
+    res_b64 = base64.b64encode(res.encode(coding))
+    return res_b64
+
+# c代码调用的是 cut_all_b64 ，不是cut_all
+def cut_all(input):
+    print(11,input)
+    seg_list = jieba.cut(input, cut_all=True)
+    res = ", ".join(seg_list)
+    print(22,res)
+    return res.encode('utf-8')
+
+
+if __name__=="__main__":
+    res = cut_all("小明硕士毕业于中国科学院计算所")
+    print(res.decode('utf-8'))
+
+
+
+
+9. 在oracle中测试：
+-------------------------
+测试环境为 笔记本上的一个vmware虚拟机，在oracle session内，首次调用 a_test_jieba_cut_main 耗时2.748秒， 后续调用 0.1 秒之内。
+对一个测试表进行调用函数update时，约 2238记录每秒. 不过在python内直接循环调用相同的次数，5秒就搞定了....（仍然保留了测试代码中的print）
+--------------------------
+SQL> set timing on;
+SQL> select a_test_jieba_cut_main('我来到北京清华大学') from dual; 
+
+A_TEST_JIEBA_CUT_MAIN('我来到北京清华大学')
+--------------------------------------------------------------------------------
+我, 来到, 北京, 清华, 清华大学, 华大, 大学
+
+Executed in 2.748 seconds
+
+
+SQL> select a_test_jieba_cut_main('小明硕士毕业于中国科学院计算所，后在日本京都大学深造') from dual;
+
+A_TEST_JIEBA_CUT_MAIN('小明硕士毕业于中国科学院计算所，后在日本京都大学深造')
+--------------------------------------------------------------------------------
+小, 明, 硕士, 毕业, 于, 中国, 中国科学院, 科学, 科学院, 学院, 计算, 计算所, , , 后, 在, 日本, 日本京都大学, 京都, 京都大学
+
+Executed in 0.075 seconds
+
+
+SQL> 
+SQL> update zht_obj_ccc set c2='我来到北京清华大学';
+
+70962 rows updated
+
+
+Executed in 2.047 seconds
+
+
+SQL> commit;
+
+Commit complete
+
+
+Executed in 0.006 seconds
+
+
+SQL> update zht_obj_ccc set c3=a_test_jieba_cut_main(c2);
+
+70962 rows updated
+
+
+Executed in 31.698 seconds
+
+
+SQL> commit;
+
+Commit complete
+
+
+Executed in 0.003 seconds
+
+
+SQL> 
+SQL> select 70962/31.698 from dual;
+
+70962/31.698
+------------
+2238.6901381
+
+Executed in 0.038 seconds
+
+
